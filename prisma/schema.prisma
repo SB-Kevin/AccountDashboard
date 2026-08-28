@@ -1,0 +1,62 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Account {
+  id             String   @id @default(cuid())
+  threadsUserId  String   @unique
+  username       String
+  displayName    String?
+  notes          String?
+  accessToken    String
+  tokenExpiresAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  posts     Post[]
+  snapshots AnalyticsSnapshot[]
+}
+
+enum PostStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  FAILED
+}
+
+model Post {
+  id            String     @id @default(cuid())
+  accountId     String
+  account       Account    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  text          String
+  status        PostStatus @default(DRAFT)
+  scheduledFor  DateTime?
+  publishedAt   DateTime?
+  threadsPostId String?
+  errorMessage  String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([accountId, status])
+  @@index([status, scheduledFor])
+}
+
+model AnalyticsSnapshot {
+  id             String   @id @default(cuid())
+  accountId      String
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  views          Int      @default(0)
+  likes          Int      @default(0)
+  replies        Int      @default(0)
+  reposts        Int      @default(0)
+  quotes         Int      @default(0)
+  followersCount Int      @default(0)
+  capturedAt     DateTime @default(now())
+
+  @@index([accountId, capturedAt])
+}
