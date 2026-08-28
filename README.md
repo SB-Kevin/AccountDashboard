@@ -63,7 +63,7 @@ Visit `http://localhost:3000/dashboard`, go to **Accounts**, and click **Link Th
 
 ## Quick deploy to Vercel
 
-`scripts/deploy-to-vercel.ps1` provisions a free Prisma Postgres database and deploys this app to Vercel end-to-end, so you can click through the live pages before wiring up a real Meta App. It doesn't need your machine to reach the database directly — the schema (`prisma db push`) is applied during Vercel's own build step, so it works even on networks that block outbound Postgres connections. Run it from a local clone of this repo (requires Node.js and the [Vercel CLI](https://vercel.com/docs/cli) — the script invokes it via `npx`, no separate install needed):
+`scripts/deploy-to-vercel.ps1` provisions a free Prisma Postgres database and deploys this app to Vercel end-to-end, so you can click through the live pages before wiring up a real Meta App. It doesn't need your machine to reach the database directly — the schema (`prisma db push`) is applied during Vercel's own build step, so it works even on networks that block outbound Postgres connections. Run it from a local clone of this repo (requires Node.js — the script installs the [Vercel CLI](https://vercel.com/docs/cli) globally itself if it isn't already on your PATH):
 
 ```powershell
 .\scripts\deploy-to-vercel.ps1 -PrismaServiceToken "<prisma console service token>" -VercelToken "<vercel account token>"

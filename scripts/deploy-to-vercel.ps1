@@ -106,7 +106,7 @@ function Set-VercelEnvVar {
         [string]$Target = "production"
     )
     Invoke-Checked "Set Vercel env var $Name" {
-        npx --yes vercel env add $Name $Target --value $Value --force --yes `
+        vercel env add $Name $Target --value $Value --force --yes `
             --project $ProjectName --token $VercelToken | Out-Null
     }
     Write-Host "  set $Name ($Target)"
@@ -114,6 +114,15 @@ function Set-VercelEnvVar {
 
 if (-not (Test-Path "package.json") -or -not (Test-Path "prisma/schema.prisma")) {
     throw "Run this script from the root of the AccountDashboard repo clone (package.json / prisma/schema.prisma not found here)."
+}
+
+if (-not (Get-Command vercel -ErrorAction SilentlyContinue)) {
+    Write-Step "Installing the Vercel CLI globally"
+    # `npx vercel ...` re-resolves the package on every call and can fail with
+    # "could not determine executable to run" if that resolution cache gets
+    # interrupted (e.g. by a previous run stopping mid-command). A one-time
+    # global install avoids that fragile path entirely.
+    Invoke-Checked "npm install -g vercel" { npm install -g vercel }
 }
 
 Write-Step "Creating Prisma Postgres project '$ProjectName' in $Region"
@@ -143,7 +152,7 @@ $envLines | Set-Content $envPath
 Write-Host "  .env updated"
 
 Write-Step "Creating the Vercel project (schema is applied by the build step, not from here)"
-& npx --yes vercel project add $ProjectName --token $VercelToken 2>&1 | ForEach-Object { Write-Host $_ }
+& vercel project add $ProjectName --token $VercelToken 2>&1 | ForEach-Object { Write-Host $_ }
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  project add reported an error above - continuing, it may already exist from a previous run"
 }
@@ -156,7 +165,7 @@ Set-VercelEnvVar -Name "CRON_SECRET" -Value $cronSecret
 Write-Host "  THREADS_APP_ID / THREADS_APP_SECRET left unset - add these later once you have a Meta App"
 
 Write-Step "Deploying to Vercel (pass 1)"
-$deployOutputRaw = & npx --yes vercel deploy --prod --yes --project $ProjectName --token $VercelToken 2>&1
+$deployOutputRaw = & vercel deploy --prod --yes --project $ProjectName --token $VercelToken 2>&1
 $deployOutputRaw | ForEach-Object { Write-Host $_ }
 if ($LASTEXITCODE -ne 0) {
     throw "Vercel deploy failed (exit code $LASTEXITCODE). See output above - if it's a prisma db push error, your schema may have a real problem."
@@ -173,7 +182,7 @@ Set-VercelEnvVar -Name "THREADS_REDIRECT_URI" -Value "$deployUrl/api/auth/thread
 
 Write-Step "Redeploying so the new environment variables take effect"
 Invoke-Checked "Vercel redeploy" {
-    npx --yes vercel deploy --prod --yes --project $ProjectName --token $VercelToken
+    vercel deploy --prod --yes --project $ProjectName --token $VercelToken
 }
 
 Write-Step "Done"
@@ -181,6 +190,6 @@ Write-Host "Dashboard: $deployUrl/dashboard" -ForegroundColor Green
 Write-Host "Prisma Postgres console: https://console.prisma.io" -ForegroundColor Green
 Write-Host ""
 Write-Host "Once you have a Meta App, add THREADS_APP_ID and THREADS_APP_SECRET with:"
-Write-Host "  npx vercel env add THREADS_APP_ID production --value `"<id>`" --force --yes --project $ProjectName --token <token>"
-Write-Host "  npx vercel env add THREADS_APP_SECRET production --value `"<secret>`" --force --yes --project $ProjectName --token <token>"
-Write-Host "then redeploy: npx vercel deploy --prod --yes --project $ProjectName --token <token>"
+Write-Host "  vercel env add THREADS_APP_ID production --value `"<id>`" --force --yes --project $ProjectName --token <token>"
+Write-Host "  vercel env add THREADS_APP_SECRET production --value `"<secret>`" --force --yes --project $ProjectName --token <token>"
+Write-Host "then redeploy: vercel deploy --prod --yes --project $ProjectName --token <token>"
