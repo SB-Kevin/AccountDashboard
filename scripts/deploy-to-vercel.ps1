@@ -49,11 +49,17 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-# PowerShell 7.3+ treats ANY stderr output from a native command (even a
-# harmless npm deprecation warning) as a terminating error when combined with
-# $ErrorActionPreference = "Stop". Turn that off and check $LASTEXITCODE
-# ourselves instead, so only real (non-zero exit code) failures stop the script.
+# PowerShell 7.3+ auto-converts a non-zero native-command exit code into a
+# terminating error when $ErrorActionPreference = "Stop". Turn that off and
+# check $LASTEXITCODE ourselves instead (see Invoke-Checked below), so only
+# real failures stop the script.
 $PSNativeCommandUseErrorActionPreference = $false
+# Separately: never merge a native command's stderr with `2>&1` below.
+# PowerShell wraps merged stderr lines as ErrorRecord objects, and just having
+# one appear in the pipeline halts execution under $ErrorActionPreference =
+# "Stop" - regardless of the setting above or the command's actual exit code.
+# Native commands here are invoked unredirected instead, so stderr (banners,
+# npm warnings) prints straight to the console without being caught by this.
 
 function Write-Step($message) {
     Write-Host ""
@@ -152,7 +158,7 @@ $envLines | Set-Content $envPath
 Write-Host "  .env updated"
 
 Write-Step "Creating the Vercel project (schema is applied by the build step, not from here)"
-& vercel project add $ProjectName --token $VercelToken 2>&1 | ForEach-Object { Write-Host $_ }
+& vercel project add $ProjectName --token $VercelToken
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  project add reported an error above - continuing, it may already exist from a previous run"
 }
@@ -165,7 +171,7 @@ Set-VercelEnvVar -Name "CRON_SECRET" -Value $cronSecret
 Write-Host "  THREADS_APP_ID / THREADS_APP_SECRET left unset - add these later once you have a Meta App"
 
 Write-Step "Deploying to Vercel (pass 1)"
-$deployOutputRaw = & vercel deploy --prod --yes --project $ProjectName --token $VercelToken 2>&1
+$deployOutputRaw = & vercel deploy --prod --yes --project $ProjectName --token $VercelToken
 $deployOutputRaw | ForEach-Object { Write-Host $_ }
 if ($LASTEXITCODE -ne 0) {
     throw "Vercel deploy failed (exit code $LASTEXITCODE). See output above - if it's a prisma db push error, your schema may have a real problem."
