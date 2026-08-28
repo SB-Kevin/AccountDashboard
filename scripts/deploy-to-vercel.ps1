@@ -7,11 +7,14 @@
   Run this from the root of a local clone of the repo (where package.json lives).
   It will:
     1. Create a Prisma Postgres project + database via the Management API.
-    2. Write the connection string to .env and run prisma migrate dev.
-    3. Deploy to Vercel (production), which creates the Vercel project on first run.
-    4. Push the required env vars, then redeploy once more so
-       THREADS_REDIRECT_URI / NEXT_PUBLIC_APP_URL (which depend on the assigned
-       Vercel URL) take effect.
+    2. Create (or reuse) a Vercel project and push DATABASE_URL / CRON_SECRET to it.
+    3. Deploy to Vercel (production). The build step itself runs
+       `prisma generate && prisma db push` against DATABASE_URL, so the schema
+       is applied on Vercel's servers - this avoids relying on your local
+       network being able to reach the database directly (many networks block
+       outbound Postgres' port 5432 even though HTTPS/443 works fine).
+    4. Push THREADS_REDIRECT_URI / NEXT_PUBLIC_APP_URL, which depend on the
+       assigned Vercel URL, then redeploy once more so they take effect.
 
   THREADS_APP_ID / THREADS_APP_SECRET are intentionally left unset - add them
   later (via `vercel env add` or the Vercel dashboard) once you have a Meta App.
@@ -46,10 +49,26 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# PowerShell 7.3+ treats ANY stderr output from a native command (even a
+# harmless npm deprecation warning) as a terminating error when combined with
+# $ErrorActionPreference = "Stop". Turn that off and check $LASTEXITCODE
+# ourselves instead, so only real (non-zero exit code) failures stop the script.
+$PSNativeCommandUseErrorActionPreference = $false
 
 function Write-Step($message) {
     Write-Host ""
     Write-Host "==> $message" -ForegroundColor Cyan
+}
+
+function Invoke-Checked {
+    param(
+        [string]$Description,
+        [scriptblock]$Command
+    )
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Description failed (exit code $LASTEXITCODE). See output above."
+    }
 }
 
 function Invoke-PrismaApi {
@@ -60,11 +79,24 @@ function Invoke-PrismaApi {
     )
     $uri = "https://api.prisma.io/v1$Path"
     $headers = @{ Authorization = "Bearer $PrismaServiceToken" }
-    if ($Body) {
-        return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers `
-            -ContentType "application/json" -Body ($Body | ConvertTo-Json -Depth 10)
+    try {
+        if ($Body) {
+            return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers `
+                -ContentType "application/json" -Body ($Body | ConvertTo-Json -Depth 10)
+        }
+        return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers
     }
-    return Invoke-RestMethod -Method $Method -Uri $uri -Headers $headers
+    catch {
+        $responseBody = $null
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            $responseBody = $_.ErrorDetails.Message
+        }
+        elseif ($_.Exception.Response) {
+            $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+            $responseBody = $reader.ReadToEnd()
+        }
+        throw "Prisma API $Method $Path failed: $($_.Exception.Message)`n$responseBody"
+    }
 }
 
 function Set-VercelEnvVar {
@@ -73,8 +105,10 @@ function Set-VercelEnvVar {
         [string]$Value,
         [string]$Target = "production"
     )
-    npx --yes vercel env add $Name $Target --value $Value --force --yes `
-        --project $ProjectName --token $VercelToken | Out-Null
+    Invoke-Checked "Set Vercel env var $Name" {
+        npx --yes vercel env add $Name $Target --value $Value --force --yes `
+            --project $ProjectName --token $VercelToken | Out-Null
+    }
     Write-Host "  set $Name ($Target)"
 }
 
@@ -100,7 +134,7 @@ while ($status -ne "ready") {
 $connectionString = $project.database.connections[0].endpoints.direct.connectionString
 Write-Host "  database ready"
 
-Write-Step "Writing DATABASE_URL to .env"
+Write-Step "Writing DATABASE_URL to .env (for optional local dev)"
 $envPath = ".env"
 $envLines = if (Test-Path $envPath) { Get-Content $envPath } else { @() }
 $envLines = $envLines | Where-Object { $_ -notmatch "^DATABASE_URL=" }
@@ -108,32 +142,39 @@ $envLines += "DATABASE_URL=`"$connectionString`""
 $envLines | Set-Content $envPath
 Write-Host "  .env updated"
 
-Write-Step "Installing dependencies"
-npm install
-
-Write-Step "Applying database schema (prisma migrate dev)"
-npx prisma migrate dev --name init
+Write-Step "Creating the Vercel project (schema is applied by the build step, not from here)"
+& npx --yes vercel project add $ProjectName --token $VercelToken 2>&1 | ForEach-Object { Write-Host $_ }
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  project add reported an error above - continuing, it may already exist from a previous run"
+}
 
 $cronSecret = [guid]::NewGuid().ToString("N")
 
-Write-Step "Deploying to Vercel (pass 1 - creates the project on first run)"
-$deployOutputRaw = npx --yes vercel deploy --prod --yes --project $ProjectName --token $VercelToken 2>&1
+Write-Step "Setting Vercel environment variables (pass 1)"
+Set-VercelEnvVar -Name "DATABASE_URL" -Value $connectionString
+Set-VercelEnvVar -Name "CRON_SECRET" -Value $cronSecret
+Write-Host "  THREADS_APP_ID / THREADS_APP_SECRET left unset - add these later once you have a Meta App"
+
+Write-Step "Deploying to Vercel (pass 1)"
+$deployOutputRaw = & npx --yes vercel deploy --prod --yes --project $ProjectName --token $VercelToken 2>&1
 $deployOutputRaw | ForEach-Object { Write-Host $_ }
+if ($LASTEXITCODE -ne 0) {
+    throw "Vercel deploy failed (exit code $LASTEXITCODE). See output above - if it's a prisma db push error, your schema may have a real problem."
+}
 $deployUrl = ($deployOutputRaw | Select-String -Pattern "https://\S+\.vercel\.app" | Select-Object -Last 1).Matches[0].Value
 if (-not $deployUrl) {
     throw "Could not determine the deployment URL from the Vercel output above."
 }
 Write-Host "  deployed to $deployUrl"
 
-Write-Step "Setting Vercel environment variables"
-Set-VercelEnvVar -Name "DATABASE_URL" -Value $connectionString
-Set-VercelEnvVar -Name "CRON_SECRET" -Value $cronSecret
+Write-Step "Setting URL-dependent environment variables (pass 2)"
 Set-VercelEnvVar -Name "NEXT_PUBLIC_APP_URL" -Value $deployUrl
 Set-VercelEnvVar -Name "THREADS_REDIRECT_URI" -Value "$deployUrl/api/auth/threads/callback"
-Write-Host "  THREADS_APP_ID / THREADS_APP_SECRET left unset - add these later once you have a Meta App"
 
 Write-Step "Redeploying so the new environment variables take effect"
-npx --yes vercel deploy --prod --yes --project $ProjectName --token $VercelToken
+Invoke-Checked "Vercel redeploy" {
+    npx --yes vercel deploy --prod --yes --project $ProjectName --token $VercelToken
+}
 
 Write-Step "Done"
 Write-Host "Dashboard: $deployUrl/dashboard" -ForegroundColor Green
