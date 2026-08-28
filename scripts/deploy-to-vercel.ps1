@@ -48,6 +48,17 @@ param(
     [string]$Region = "us-east-1"
 )
 
+# Vercel project names must be lowercase and may only contain letters,
+# digits, '.', '_', '-' (and not the sequence '---'). The folder-name
+# default (e.g. "AccountDashboard") fails that, so sanitize either way.
+$originalProjectName = $ProjectName
+$ProjectName = ($ProjectName.ToLower() -replace '[^a-z0-9._-]', '-') -replace '-{2,}', '-'
+$ProjectName = $ProjectName.Trim('-')
+if (-not $ProjectName) { $ProjectName = "account-dashboard" }
+if ($ProjectName -ne $originalProjectName) {
+    Write-Host "Using project name '$ProjectName' (sanitized from '$originalProjectName' for Vercel's naming rules)"
+}
+
 $ErrorActionPreference = "Stop"
 # PowerShell 7.3+ auto-converts a non-zero native-command exit code into a
 # terminating error when $ErrorActionPreference = "Stop". Turn that off and
