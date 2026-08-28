@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import AnalyticsView from "@/components/AnalyticsView";
 
+export const dynamic = "force-dynamic";
+
 export default async function AnalyticsPage() {
   const accounts = await prisma.account.findMany({
     orderBy: { createdAt: "asc" },

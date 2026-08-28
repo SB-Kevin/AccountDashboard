@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import ComposeForm from "@/components/ComposeForm";
 
+export const dynamic = "force-dynamic";
+
 export default async function ComposePage() {
   const accounts = await prisma.account.findMany({
     orderBy: { createdAt: "asc" },

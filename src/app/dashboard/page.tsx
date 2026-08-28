@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 
+export const dynamic = "force-dynamic";
+
 export default async function DashboardOverview() {
   const [accountCount, scheduledCount, publishedCount] = await Promise.all([
     prisma.account.count(),
